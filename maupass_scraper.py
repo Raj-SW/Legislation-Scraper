@@ -320,17 +320,45 @@ def build_requests_session_from_driver(driver: webdriver.Chrome) -> requests.Ses
     return session
 
 
+def establish_sc_session(driver: webdriver.Chrome) -> None:
+    # Hit the Supreme Court SSO bridge once after MauPass 2FA so the target site issues its own session
+    bridge_url = "https://supremecourt.govmu.org/maupass/login"
+    print(f"[NAV] Touching SC SSO bridge: {bridge_url}")
+    driver.get(bridge_url)
+    try:
+        WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
+    except TimeoutException:
+        print("[NAV] Bridge load timeout; continuing anyway")
+
+
 def navigate_to_acts_list(driver: webdriver.Chrome, acts_url: str) -> None:
     print(f"[NAV] Navigating to acts list: {acts_url}")
     # Ensure we have the type=act_regulation query param
     if "type=act_regulation" not in acts_url:
         sep = '&' if '?' in acts_url else '?'
         acts_url = f"{acts_url}{sep}type=act_regulation"
-    driver.get(acts_url)
-    WebDriverWait(driver, 30).until(
-        EC.presence_of_element_located((By.CSS_SELECTOR, "table.views-view-table"))
-    )
-    print(f"[NAV] Landed on: {driver.current_url}")
+
+    # Ensure SC session first
+    establish_sc_session(driver)
+
+    attempts = 0
+    while attempts < 3:
+        attempts += 1
+        driver.get(acts_url)
+        print(f"[NAV] Landed on: {driver.current_url}")
+        # If redirected to judgments, try again after touching bridge once more
+        if "/most-recent-judgments" in (driver.current_url or ""):
+            print("[NAV] Redirected to judgments; re-touching bridge and retrying…")
+            establish_sc_session(driver)
+            continue
+        try:
+            WebDriverWait(driver, 15).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "table.views-view-table"))
+            )
+            break
+        except TimeoutException:
+            print("[NAV] Table not found yet; retrying…")
+            continue
 
 
 def collect_group_rows(driver: webdriver.Chrome) -> List[Tuple[str, str]]:
